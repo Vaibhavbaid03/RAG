@@ -14,11 +14,14 @@ The bot indexes 160 Refrens Help Center articles from https://help.refrens.com/s
 
 ##  Project Structure
 
-├── server.ts # Fastify server handling POST /rag
-├── ragHandler.ts # Core RAG logic: loads, chunks, embeds, retrieves 
-├── Refrens_Help_URLs.csv # URLs to be scraped & embedded 
-├── .env # Secrets: HuggingFace + Qdrant API keys 
-├── tsconfig.json # TypeScript config
+```
+├── server.ts               # Fastify server exposing the /rag POST endpoint
+├── ragHandler.ts           # Core RAG logic: loads URLs, chunks content, embeds vectors, retrieves answers
+├── Refrens_Help_URLs.csv   # List of Refrens help URLs to be scraped & embedded
+├── .env                    # Environment variables (Hugging Face & Qdrant API keys)
+├── tsconfig.json           # TypeScript configuration
+```
+
 
 ##  Environment Setup
 
