@@ -1,0 +1,25 @@
+{
+  "name": "gemini-rag-urls",
+  "type": "module",
+  "scripts": {
+    "start": "tsx chatbot.ts"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.0",
+    "@huggingface/inference": "^2.8.1",
+    "@langchain/community": "^0.3.40",
+    "@langchain/core": "^0.3.44",
+    "@langchain/google-genai": "^0.0.14",
+    "@qdrant/js-client-rest": "^1.13.0",
+    "@xenova/transformers": "^2.17.2",
+    "cheerio": "^1.0.0-rc.12",
+    "csv-parser": "^3.2.0",
+    "dotenv": "^16.5.0",
+    "fastify": "^5.3.0",
+    "qdrant-client": "^0.0.1",
+    "tsx": "^4.19.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}
