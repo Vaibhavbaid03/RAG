@@ -69,19 +69,19 @@ Step 2: Start the Fastify Server
 
 ## Dependencies:
 
-npm install langchain @langchain/community @langchain/core
-npm install fastify dotenv node-fetch
-npm install @qdrant/js-client-rest
-npm install csv-parser
-npm install tsx typescript --save-dev
+- npm install langchain @langchain/community @langchain/core
+- npm install fastify dotenv node-fetch
+- npm install @qdrant/js-client-rest
+- npm install csv-parser
+- npm install tsx typescript --save-dev
 
 
 
 ## Features:
 
- Batch loads and embeds 100+ Refrens articles from CSV 
- HuggingFace Embeddings (MiniLM)
- Qdrant Cloud with HNSW + on-disk payloads 
- Mistral via Ollama for answer generation 
- API endpoint: POST /rag 
- Accurate source-citation in responses
+ - Batch loads and embeds 100+ Refrens articles from CSV 
+ - HuggingFace Embeddings (MiniLM)
+ - Qdrant Cloud with HNSW + on-disk payloads 
+ - Mistral via Ollama for answer generation 
+ - API endpoint: POST /rag 
+ - Accurate source-citation in responses
