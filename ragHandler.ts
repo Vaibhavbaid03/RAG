@@ -1,4 +1,5 @@
 // ragHandler.ts, embedding using OLLAMA, huggingFace is SLOW.
+
 import 'dotenv/config';
 import * as fs from 'fs/promises';
 import fetch from 'node-fetch';
@@ -13,11 +14,13 @@ import { Document } from 'langchain/document';
 import { RunnableMap, RunnableSequence } from '@langchain/core/runnables';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { OllamaEmbeddings } from '@langchain/community/embeddings/ollama';
+import cliProgress from 'cli-progress';
+
 
 const COLLECTION_NAME = 'mistral_rag_ollama';
 const QDRANT_URL = process.env.QDRANT_URL!;
 const CSV_FILE = 'Refrens_Help_URLs.csv';
-const BATCH_SIZE = 10;
+const BATCH_SIZE = 5;
 const DELAY_MS = 4000;
 
 // Qdrant Client (Cloud)
@@ -68,7 +71,7 @@ async function loadAndSplitDocs(urls: string[]): Promise<Document[]> {
       console.log(`  Loaded ${docs.length} docs from: ${url}`);
 
       docs.forEach(doc => doc.metadata.source = url);
-      const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 1000, chunkOverlap: 200 });
+      const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 512, chunkOverlap: 64 });
       const split = await splitter.splitDocuments(docs);
       console.log(`  Split into ${split.length} chunks.`);
       allDocs.push(...split);
@@ -108,45 +111,73 @@ export default async function ragHandler(question: string): Promise<string> {
   const exists = await checkCollectionExists();
 
   if (exists) {
-    console.log(` Qdrant collection '${COLLECTION_NAME}' already exists.`);
-    vectorStore = await QdrantVectorStore.fromExistingCollection(embeddings, {
-      url: QDRANT_URL,
-      apiKey: process.env.QDRANT_API_KEY,
-      collectionName: COLLECTION_NAME
-    });
-  } else {
-    console.log(' First-time setup. Embedding all documents...');
-    console.log(` Found ${allUrls.length} URLs in CSV`);
-    vectorStore = await QdrantVectorStore.fromDocuments([], embeddings, {
-      url: QDRANT_URL,
-      apiKey: process.env.QDRANT_API_KEY,
-      collectionName: COLLECTION_NAME,
-      collectionOptions: {
-        onDiskPayload: true,
-        hnswConfig: {
-          m: 16,
-          efConstruct: 100
-        }
-      }
-    });
+  console.log(` Qdrant collection '${COLLECTION_NAME}' already exists.`);
+  vectorStore = await QdrantVectorStore.fromExistingCollection(embeddings, {
+    url: QDRANT_URL,
+    apiKey: process.env.QDRANT_API_KEY,
+    collectionName: COLLECTION_NAME
+  });
+} else {
+  console.log(' First-time setup. Embedding all documents...');
+  console.log(` Found ${allUrls.length} URLs in CSV`);
 
-    for (let i = 0; i < allUrls.length; i += BATCH_SIZE) {
-      const batch = allUrls.slice(i, i + BATCH_SIZE);
-      console.log(` Batch ${i / BATCH_SIZE + 1}/${Math.ceil(allUrls.length / BATCH_SIZE)}...`);
-      const docs = await loadAndSplitDocs(batch);
-      if (docs.length > 0) {
-      console.log(`  Storing ${docs.length} chunks...`);
-        await vectorStore.addDocuments(docs);
-        console.log(`  Embedded & stored ${docs.length} chunks.`);
-      } else {
-        console.warn(`️Skipping batch — no content extracted.`);
-      }
-      if (i + BATCH_SIZE < allUrls.length) {
-        console.log(`  Waiting ${DELAY_MS}ms...`);
-        await setTimeout(DELAY_MS);
+  vectorStore = await QdrantVectorStore.fromDocuments([], embeddings, {
+    url: QDRANT_URL,
+    apiKey: process.env.QDRANT_API_KEY,
+    collectionName: COLLECTION_NAME,
+    collectionOptions: {
+      onDiskPayload: true,
+      hnswConfig: {
+        m: 16,
+        efConstruct: 100
       }
     }
+  });
+
+  const progressBar = new cliProgress.SingleBar({
+    format: 'Embedding Progress |{bar}| {percentage}% | Batch {value}/{total} | ETA: {eta_formatted}',
+    barCompleteChar: '█',
+    barIncompleteChar: '░',
+    hideCursor: true
+  });
+
+  const totalBatches = Math.ceil(allUrls.length / BATCH_SIZE);
+  progressBar.start(totalBatches, 0);
+  const startTime = Date.now();
+
+  for (let i = 0; i < allUrls.length; i += BATCH_SIZE) {
+    const batchNum = i / BATCH_SIZE + 1;
+    const batch = allUrls.slice(i, i + BATCH_SIZE);
+    console.log(`\n Batch ${batchNum}/${totalBatches}...`);
+
+    console.log(' Loading & splitting docs...');
+    const docs = await loadAndSplitDocs(batch);
+    console.log(` Extracted ${docs.length} chunks.`);
+
+    if (docs.length > 0) {
+      console.log(` Storing ${docs.length} chunks...`);
+      await vectorStore.addDocuments(docs);
+      console.log(`Embedded & stored.`);
+
+      const elapsed = (Date.now() - startTime) / 1000;
+      console.log(` Time elapsed so far: ${elapsed.toFixed(1)}s`);
+
+      progressBar.increment();
+    } else {
+      console.warn(` Skipping batch — no content extracted.`);
+    }
+
+    if (i + BATCH_SIZE < allUrls.length) {
+      console.log(` Waiting ${DELAY_MS}ms before next batch...`);
+      await setTimeout(DELAY_MS);
+    }
   }
+
+  progressBar.stop();
+  console.log(' Embedding complete!');
+}
+
+
 
   const retriever = vectorStore.asRetriever();
 
@@ -170,3 +201,5 @@ export default async function ragHandler(question: string): Promise<string> {
   const response = await ragChain.invoke({ question });
   return response;
 }
+
+
