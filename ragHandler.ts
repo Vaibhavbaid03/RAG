@@ -42,7 +42,7 @@ const embeddings = new OllamaEmbeddings({ model: 'nomic-embed-text' });
 // RAG Prompt
 const ragPrompt = PromptTemplate.fromTemplate(`
 You are a helpful assistant. Use the following context to answer the question.
-If relevant, cite the source at the end.
+Cite relevant (Source: ...) links at the end if provided in the context.
 
 Context:
 {context}
