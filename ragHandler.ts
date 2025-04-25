@@ -1,205 +1,93 @@
-// ragHandler.ts, embedding using OLLAMA, huggingFace is SLOW.
-
+// ragHandler.ts — Azure-hosted ChromaDB!
 import 'dotenv/config';
-import * as fs from 'fs/promises';
-import fetch from 'node-fetch';
-import { setTimeout } from 'timers/promises';
-import { RunnableLambda } from '@langchain/core/runnables';
-import { CheerioWebBaseLoader } from '@langchain/community/document_loaders/web/cheerio';
-import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
-import { HuggingFaceInferenceEmbeddings } from '@langchain/community/embeddings/hf';
-import { QdrantVectorStore } from '@langchain/qdrant';
-import { QdrantClient } from '@qdrant/js-client-rest';
-import { Document } from 'langchain/document';
-import { RunnableMap, RunnableSequence } from '@langchain/core/runnables';
-import { PromptTemplate } from '@langchain/core/prompts';
-import { OllamaEmbeddings } from '@langchain/ollama';
-import cliProgress from 'cli-progress';
+import { Chroma } from "@langchain/community/vectorstores/chroma";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { OpenAIEmbeddings } from "@langchain/openai";
+import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
+import { CheerioWebBaseLoader } from "@langchain/community/document_loaders/web/cheerio";
+import { RunnableSequence } from "@langchain/core/runnables";
+import { PromptTemplate } from "@langchain/core/prompts";
+import * as fs from "fs/promises";
+import { setTimeout } from "timers/promises";
 
-
-const COLLECTION_NAME = 'mistral_rag_ollama';
-const QDRANT_URL = process.env.QDRANT_URL!;
-const CSV_FILE = 'Refrens_Help_URLs.csv';
+const COLLECTION_NAME = "refrens_help_docs";
+const CSV_FILE = "Refrens_Help_URLs.csv";
 const BATCH_SIZE = 5;
-const DELAY_MS = 4000;
+const DELAY_MS = 3000;
 
-// Qdrant Client (Cloud)
-const client = new QdrantClient({
-  url: QDRANT_URL,
-  apiKey: process.env.QDRANT_API_KEY
+const embeddingModel = new OpenAIEmbeddings({
+  modelName: "text-embedding-3-small",
+  openAIApiKey: process.env.OPENAI_API_KEY,
 });
 
-// Embedding Model (HF)
-/*
-const embeddings = new HuggingFaceInferenceEmbeddings({
-  apiKey: process.env.HUGGINGFACE_API_KEY!,
-  model: 'sentence-transformers/all-MiniLM-L6-v2'
+const llm = new ChatGoogleGenerativeAI({
+  modelName: "gemini-pro",
+  apiKey: process.env.GEMINI_API_KEY,
+  temperature: 0.3,
 });
-*/
 
-const embeddings = new OllamaEmbeddings({ model: 'nomic-embed-text' });
+async function loadDocsFromCSV() {
+  const urls = (await fs.readFile(CSV_FILE, "utf-8")).split("\n").filter(Boolean);
+  const docs = [];
 
-// RAG Prompt
-const ragPrompt = PromptTemplate.fromTemplate(`
-You are a helpful assistant. Use the following context to answer the question.
-Cite relevant (Source: ...) links at the end if provided in the context.
+  for (let i = 0; i < urls.length; i += BATCH_SIZE) {
+    const batch = urls.slice(i, i + BATCH_SIZE);
+    for (const url of batch) {
+      const loader = new CheerioWebBaseLoader(url);
+      const batchDocs = await loader.load();
+      docs.push(...batchDocs);
+    }
+    await setTimeout(DELAY_MS);
+  }
+
+  return docs;
+}
+
+//  Embed help articles into Azure-hosted ChromaDB
+export async function embedAndStore() {
+  const docs = await loadDocsFromCSV();
+  const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 1000, chunkOverlap: 200 });
+  const splitDocs = await splitter.splitDocuments(docs);
+
+  await Chroma.fromDocuments(splitDocs, embeddingModel, {
+    collectionName: COLLECTION_NAME,
+    url: process.env.CHROMA_URL, 
+  });
+
+  console.log("✅ Docs embedded to Azure ChromaDB");
+}
+
+//  Answer any query using Chroma + Gemini
+export async function answerQuestion(query: string) {
+  const vectorStore = await Chroma.fromExistingCollection(embeddingModel, {
+    collectionName: COLLECTION_NAME,
+    url: process.env.CHROMA_URL,
+  });
+
+  const retriever = vectorStore.asRetriever();
+
+  const prompt = PromptTemplate.fromTemplate(`
+Use the following context to answer the question.
 
 Context:
 {context}
 
-Question:
-{question}
-
-Answer:
+Question: {question}
 `);
 
-async function readUrlsFromCsv(): Promise<string[]> {
-  const fileContent = await fs.readFile(CSV_FILE, 'utf8');
-  return fileContent
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.startsWith('http'));
-}
+const chain = RunnableSequence.from([
+  RunnableLambda.from(async (input: string) => {
+    const docs = await retriever.getRelevantDocuments(input);
+    return {
+      context: docs.map(d => d.pageContent).join("\n\n"),
+      question: input,
+    };
+  }),
+  prompt,
+  llm,
+]);
 
-async function loadAndSplitDocs(urls: string[]): Promise<Document[]> {
-  const allDocs: Document[] = [];
-  for (const url of urls) {
-    try {
-      console.log(`  Loading URL: ${url}`);
-      const loader = new CheerioWebBaseLoader(url);
-      const docs = await loader.load();
-      console.log(`  Loaded ${docs.length} docs from: ${url}`);
-
-      docs.forEach(doc => doc.metadata.source = url);
-      const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 512, chunkOverlap: 64 });
-      const split = await splitter.splitDocuments(docs);
-      console.log(`  Split into ${split.length} chunks.`);
-      allDocs.push(...split);
-    } catch (e: any) {
-      console.error(`  Failed to load ${url}:`, e.message || e);
-    }
-  }
-  return allDocs;
-}
-
-
-async function checkCollectionExists(): Promise<boolean> {
-  try {
-    const collections = await client.getCollections();
-    console.log(` Qdrant connected. Found ${collections.collections.length} collections.`);
-    return collections.collections.some(c => c.name === COLLECTION_NAME);
-  } catch (err) {
-    console.error('Error checking Qdrant collections:', err);
-    return false;
-  }
-}
-
-async function callMistralLocally(prompt: string): Promise<string> {
-  const res = await fetch('http://localhost:11434/api/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'mistral', prompt, stream: false })
-  });
-  const data = await res.json();
-  return data?.response || 'No response from Mistral';
-}
-
-export default async function ragHandler(question: string): Promise<string> {
-  const allUrls = await readUrlsFromCsv();
-  let vectorStore: QdrantVectorStore;
-
-  const exists = await checkCollectionExists();
-
-  if (exists) {
-  console.log(` Qdrant collection '${COLLECTION_NAME}' already exists.`);
-  vectorStore = await QdrantVectorStore.fromExistingCollection(embeddings, {
-    url: QDRANT_URL,
-    apiKey: process.env.QDRANT_API_KEY,
-    collectionName: COLLECTION_NAME
-  });
-} else {
-  console.log(' First-time setup. Embedding all documents...');
-  console.log(` Found ${allUrls.length} URLs in CSV`);
-
-  vectorStore = await QdrantVectorStore.fromDocuments([], embeddings, {
-    url: QDRANT_URL,
-    apiKey: process.env.QDRANT_API_KEY,
-    collectionName: COLLECTION_NAME,
-    collectionOptions: {
-      onDiskPayload: true,
-      hnswConfig: {
-        m: 16,
-        efConstruct: 100
-      }
-    }
-  });
-
-  const progressBar = new cliProgress.SingleBar({
-    format: 'Embedding Progress |{bar}| {percentage}% | Batch {value}/{total} | ETA: {eta_formatted}',
-    barCompleteChar: '█',
-    barIncompleteChar: '░',
-    hideCursor: true
-  });
-
-  const totalBatches = Math.ceil(allUrls.length / BATCH_SIZE);
-  progressBar.start(totalBatches, 0);
-  const startTime = Date.now();
-
-  for (let i = 0; i < allUrls.length; i += BATCH_SIZE) {
-    const batchNum = i / BATCH_SIZE + 1;
-    const batch = allUrls.slice(i, i + BATCH_SIZE);
-    console.log(`\n Batch ${batchNum}/${totalBatches}...`);
-
-    console.log(' Loading & splitting docs...');
-    const docs = await loadAndSplitDocs(batch);
-    console.log(` Extracted ${docs.length} chunks.`);
-
-    if (docs.length > 0) {
-      console.log(` Storing ${docs.length} chunks...`);
-      await vectorStore.addDocuments(docs);
-      console.log(`Embedded & stored.`);
-
-      const elapsed = (Date.now() - startTime) / 1000;
-      console.log(` Time elapsed so far: ${elapsed.toFixed(1)}s`);
-
-      progressBar.increment();
-    } else {
-      console.warn(` Skipping batch — no content extracted.`);
-    }
-
-    if (i + BATCH_SIZE < allUrls.length) {
-      console.log(` Waiting ${DELAY_MS}ms before next batch...`);
-      await setTimeout(DELAY_MS);
-    }
-  }
-
-  progressBar.stop();
-  console.log(' Embedding complete!');
-}
-
-
-
-  const retriever = vectorStore.asRetriever();
-
-  const ragChain = RunnableSequence.from([
-    RunnableMap.from({
-      context: async (input: { question: string }) => {
-        const docs = await retriever.invoke(input.question);
-        return docs.map(doc => `- ${doc.pageContent}\n(Source: ${doc.metadata?.source})`).join('\n\n');
-      },
-      question: (input: { question: string }) => input.question
-    }),
-    ragPrompt,
-    new RunnableLambda({
-      func: async (input: any) => {
-        const prompt = typeof input === 'string' ? input : input?.toString?.();
-        return await callMistralLocally(prompt);
-      }
-    })
-  ]);
-
-  const response = await ragChain.invoke({ question });
+  const response = await chain.invoke(query);
+  console.log("💬 Gemini says:", response);
   return response;
 }
-
-
