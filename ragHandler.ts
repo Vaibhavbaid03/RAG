@@ -149,3 +149,20 @@ const chain = RunnableLambda.from(async (input: string) => {
   console.log(" Gemini says:", response);
   return response;
 }
+// const RAG_PROMPT = PromptTemplate.fromTemplate(`
+// You are an assistant answering questions about website features and documentation.
+// Use the following retrieved context sections to answer the question.
+// If you don't know the answer, just say that you don't know.
+// Keep the answer concise and directly related to the question.
+// Use the conversation history for context if needed.
+
+// Conversation History:
+// {chatHistory}
+
+// Context:
+// {context}
+
+// Question:
+// {question}
+
+// Answer:`);
